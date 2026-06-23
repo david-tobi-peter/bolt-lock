@@ -14,8 +14,8 @@ type LogEntry struct {
 	Result    string    `json:"result"`
 }
 
-func (logEntry *LogEntry) Marshal() ([]byte, error) {
-	return json.Marshal(logEntry)
+func (le *LogEntry) Marshal() ([]byte, error) {
+	return json.Marshal(le)
 }
 
 func (le *LogEntry) Unmarshal(data []byte) (*LogEntry, error) {

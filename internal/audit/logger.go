@@ -34,11 +34,11 @@ func NewAuditLogger(db *bbolt.DB) (*AuditLogger, error) {
 	return &AuditLogger{db: db}, nil
 }
 
-func (auditLogger *AuditLogger) WriteAppendOnly(logEntry *LogEntry) error {
+func (al *AuditLogger) WriteAppendOnly(logEntry *LogEntry) error {
 	keyString := fmt.Sprintf("%s-%s", logEntry.Timestamp.Format(time.RFC3339Nano), logEntry.EntryID)
 	key := []byte(keyString)
 
-	return auditLogger.db.Update(func(tx *bbolt.Tx) error {
+	return al.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(BucketName)
 		if bucket == nil {
 			return ErrInvalidBucket
