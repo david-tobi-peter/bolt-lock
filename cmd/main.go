@@ -2,7 +2,10 @@ package main
 
 import (
 	"log"
+	"net/http"
+	"time"
 
+	"github.com/david-tobi-peter/bolt-lock/internal/api"
 	"github.com/david-tobi-peter/bolt-lock/internal/audit"
 	"github.com/david-tobi-peter/bolt-lock/internal/config"
 	"github.com/david-tobi-peter/bolt-lock/internal/database"
@@ -43,9 +46,22 @@ func main() {
 
 	log.Printf("Log row successfully written to bbolt with hash: %s", entry.Hash)
 
-	if err := logger.VerifyCurrentBlock(); err != nil {
-		log.Fatalf("Failed to verify current block: %v", err)
+	handler := api.NewAuditHandler(logger)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/audit", handler.QueryEntries)
+	mux.HandleFunc("/audit/verify", handler.VerifyCurrentBlock)
+
+	server := &http.Server{
+		Addr:         ":8080",
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 
-	log.Println("Ledger structural health verified successfully.")
+	log.Printf("bolt-lock server listening on :8080")
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Server HTTP Runtime Error: %v", err)
+	}
 }

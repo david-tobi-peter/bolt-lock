@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/david-tobi-peter/bolt-lock/internal/config"
@@ -18,6 +19,19 @@ type ConfiguredKeys struct {
 type AuditLogger struct {
 	db   *bbolt.DB
 	Keys ConfiguredKeys
+}
+
+type QueryFilters struct {
+	Actor string
+	Path  string
+	From  time.Time
+	To    time.Time
+}
+
+type VerificationResult struct {
+	Status       string `json:"status"`
+	BrokenLinkID string `json:"brokenLinkId,omitempty"`
+	Reason       string `json:"reason,omitempty"`
 }
 
 func NewAuditLogger(db *bbolt.DB) (*AuditLogger, error) {
@@ -119,16 +133,18 @@ func (al *AuditLogger) WriteAppendOnly(actor, operation, path, encryptedPayload 
 	return finalizedEntry, nil
 }
 
-func (al *AuditLogger) VerifyCurrentBlock() error {
-	return al.db.View(func(tx *bbolt.Tx) error {
+func (al *AuditLogger) VerifyCurrentBlock() (*VerificationResult, error) {
+	var expectedPreviousHash string = ""
+	var recordCount int
+	result := &VerificationResult{Status: "intact"}
+
+	err := al.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(config.AuditBucketName)
 		if bucket == nil {
 			return config.ErrBucketUninitialized
 		}
 
 		cursor := bucket.Cursor()
-		var expectedPreviousHash string = ""
-		var recordCount int
 
 		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
 			recordCount++
@@ -139,18 +155,73 @@ func (al *AuditLogger) VerifyCurrentBlock() error {
 			}
 
 			if entry.PreviousHash != expectedPreviousHash {
-				return fmt.Errorf("scan canceled; previous hash mismatch at key %s", k)
+				result.Status = "tampered"
+				result.BrokenLinkID = entry.EntryID
+				result.Reason = config.ErrLineageBreach.Error()
+				return nil
 			}
 
 			recalculatedHash := entry.ComputeHMAC(al.Keys.HMACKey)
 			if entry.Hash != recalculatedHash {
-				return fmt.Errorf("%w at record %s: cryptographic hash is invalid", config.ErrTamperDetected, entry.EntryID)
+				result.Status = "tampered"
+				result.BrokenLinkID = entry.EntryID
+				result.Reason = config.ErrLineageBreach.Error()
+				return nil
 			}
 
 			expectedPreviousHash = entry.Hash
 		}
 
-		fmt.Printf("Validation complete: %d records confirmed unmutated.\n", recordCount)
 		return nil
 	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func (al *AuditLogger) QueryEntries(filters QueryFilters) ([]LogEntry, error) {
+	var entries []LogEntry
+
+	err := al.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(config.AuditBucketName)
+		if bucket == nil {
+			return config.ErrBucketUninitialized
+		}
+
+		cursor := bucket.Cursor()
+		for k, v := cursor.First(); k != nil; k, v = cursor.Next() {
+			entry, err := UnmarshalLogEntry(v)
+			if err != nil {
+				return fmt.Errorf("scan canceled; unmarshal breakdown at key %s: %w", k, err)
+			}
+
+			if filters.Actor != "" && entry.Actor != filters.Actor {
+				continue
+			}
+
+			if filters.Path != "" && !strings.HasPrefix(entry.Path, filters.Path) {
+				continue
+			}
+
+			if !filters.From.IsZero() && entry.Timestamp.Before(filters.From) {
+				continue
+			}
+
+			if !filters.To.IsZero() && entry.Timestamp.After(filters.To) {
+				continue
+			}
+
+			entries = append(entries, *entry)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return entries, nil
 }
