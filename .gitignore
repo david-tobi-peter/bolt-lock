@@ -35,3 +35,6 @@ vendor/
 # Temp / cache files
 /tmp/
 *.log
+
+audit_system_guide.md
+.env
